@@ -82,6 +82,24 @@ DEFAULT_TAKEOVER_FPS = [
 
 DOMAIN_RE = re.compile(r"^(?=.{3,253}$)([a-z0-9-]{1,63}\.)+[a-z0-9-]{2,63}$", re.IGNORECASE)
 
+# TLD-like tokens we expect to see in concatenation artifacts produced by
+# upstream sources (notably HackerTarget) when two SAN values from a shared
+# CDN certificate get glued together without a separator, e.g.
+#   "arquitecturamd.com.ar" + "www.fanduel.com" -> "arquitecturamd.com.arwww.fanduel.com"
+# We deliberately keep this list narrow — only TLDs/ccTLDs commonly observed
+# in real-world artifacts. We do NOT check these as interior labels because
+# FanDuel uses 2-letter US state codes (co, ar, de, in, la, md, me, tn, ...)
+# that legitimately collide with ccTLDs.
+KNOWN_TLD_TOKENS_FOR_ARTIFACT = frozenset({
+    # gTLDs
+    "com", "net", "org", "edu", "gov", "biz", "info", "io", "ai", "app",
+    "africa", "asia",
+    # ccTLDs (kept narrow — only used for last-label-glue detection, not interior)
+    "br", "au", "ar", "bj", "bo", "be", "uk", "jp", "fr", "es", "it",
+    "ru", "cn", "us", "ca", "mx", "nz", "tr", "tw", "kr", "se", "no",
+    "fi", "dk", "nl", "pl", "cz", "gr", "pt", "ch", "at", "ie", "za",
+})
+
 # Recon modes (opinionated presets)
 MODES = {
     "stealth": {
@@ -215,6 +233,34 @@ def is_subdomain_of(candidate: str, domain: str) -> bool:
     c = candidate.strip().lower().rstrip(".")
     d = domain.strip().lower().rstrip(".")
     return c == d or c.endswith("." + d)
+
+def looks_like_concat_artifact(name: str, target: str) -> bool:
+    """
+    Detect names where an upstream source glued two SAN values together
+    without a separator, producing structurally-valid-but-fake subdomains
+    like 'foo.com.brwww.fanduel.com' or 'doing-business.africawww.fanduel.com'.
+
+    The signature is: the rightmost label of the subdomain portion is
+    '<known-tld><www>' (e.g. 'brwww', 'auwww', 'africawww', 'bizwww').
+    Real *.fanduel.com subdomains never have a label of that shape, but
+    this is exactly what shared-CDN cert SAN concatenation produces.
+
+    We do NOT check for interior public-suffix labels because legitimate
+    FanDuel subdomains use US state codes (co, ar, de, in, la, md, me, tn, ...)
+    that collide with ccTLDs.
+    """
+    n = name.strip().lower().rstrip(".")
+    t = target.strip().lower().rstrip(".")
+    if not n.endswith("." + t):
+        return False
+    left = n[: -(len(t) + 1)]
+    if not left:
+        return False
+    last_label = left.rsplit(".", 1)[-1]
+    if last_label == "www" or not last_label.endswith("www") or len(last_label) <= 3:
+        return False
+    head = last_label[:-3]
+    return head in KNOWN_TLD_TOKENS_FOR_ARTIFACT
 
 def split_names(raw: str) -> List[str]:
     out: List[str] = []
@@ -1104,12 +1150,21 @@ def cmd_scan(args: argparse.Namespace) -> int:
         http_backoff=http_backoff,
     )
 
-    # Merge candidates
+    # Merge candidates + filter known concatenation artifacts.
+    # Artifacts are kept in concat_fp_hosts (with provenance) so the operator
+    # can audit them rather than relying on silent drops.
     candidates: Set[str] = set()
+    concat_fp_hosts: Dict[str, Set[str]] = {}
     for src, names in per_source.items():
         for n in names:
-            if is_subdomain_of(n, domain):
-                candidates.add(normalize_domain(n))
+            nn = normalize_domain(n)
+            if not is_subdomain_of(nn, domain):
+                continue
+            if looks_like_concat_artifact(nn, domain):
+                concat_fp_hosts.setdefault(nn, set()).add(src)
+                logging.debug("dropped concat artifact from %s: %r", src, nn)
+                continue
+            candidates.add(nn)
 
     # Optional bruteforce
     bruteforce = bool(args.wordlist)
@@ -1184,6 +1239,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         "resolved_strict": run_dir / "resolved_strict.txt",
         "unresolved": run_dir / "unresolved.txt",
         "wildcard_fp": run_dir / "wildcard_fp.txt",
+        "concat_fp": run_dir / "concat_fp.txt",
         "cname_map": run_dir / "cname_map.csv",
         "ips": run_dir / "ips.txt",
         "alive_txt": run_dir / "alive.txt",
@@ -1204,6 +1260,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
     write_lines(paths["resolved_strict"], resolved_strict_hosts)
     write_lines(paths["unresolved"], unresolved_hosts)
     write_lines(paths["wildcard_fp"], wildcard_fp_hosts)
+    concat_fp_lines = [f"{h}\t# sources: {','.join(sorted(srcs))}" for h, srcs in sorted(concat_fp_hosts.items())]
+    write_lines(paths["concat_fp"], concat_fp_lines)
     write_lines(paths["cname_map"], cname_lines)
     write_lines(paths["ips"], sorted(ips))
 
@@ -1305,6 +1363,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
             "resolved_strict": len(resolved_strict_hosts),
             "unresolved": len(unresolved_hosts),
             "wildcard_fp": len(wildcard_fp_hosts),
+            "concat_fp": len(concat_fp_hosts),
             "alive_urls": len(alive_urls),
             "alive_clusters": len(cluster_rows),
             "takeover_candidates": len(takeover_findings),
@@ -1343,6 +1402,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     report_lines.append(f"- Resolved (strict): **{len(resolved_strict_hosts)}**")
     report_lines.append(f"- Unresolved: **{len(unresolved_hosts)}**")
     report_lines.append(f"- Wildcard probable FP: **{len(wildcard_fp_hosts)}**")
+    report_lines.append(f"- Concatenation artifacts (filtered): **{len(concat_fp_hosts)}**")
     report_lines.append(f"- Alive URLs: **{len(alive_urls)}**")
     report_lines.append(f"- Alive clusters: **{len(cluster_rows)}**")
     report_lines.append(f"- Takeover candidates: **{len(takeover_findings)}**")
@@ -1363,6 +1423,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     report_lines.append("")
     report_lines.append("## Notes")
     report_lines.append("- `wildcard_fp.txt` contains hosts that resolved but match wildcard signature observed for random labels.")
+    report_lines.append("- `concat_fp.txt` contains names dropped pre-DNS as upstream-source SAN concatenation artifacts (e.g. HackerTarget gluing two SANs from a shared CDN cert). Each line shows the offending name and which source(s) produced it.")
     report_lines.append("- Takeover results are heuristic only; manual verification required.")
     report_lines.append("")
     paths["report"].write_text("\n".join(report_lines) + "\n", encoding="utf-8")
@@ -1388,6 +1449,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         t.add_row("Resolved (DNS)", str(len(resolved_hosts)))
         t.add_row("Resolved (strict)", str(len(resolved_strict_hosts)))
         t.add_row("Wildcard FP", str(len(wildcard_fp_hosts)))
+        t.add_row("Concat artifacts", str(len(concat_fp_hosts)))
         t.add_row("Alive URLs", str(len(alive_urls)))
         t.add_row("Alive clusters", str(len(cluster_rows)))
         t.add_row("Takeover candidates", str(len(takeover_findings)))
