@@ -1,2 +1,19 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# SubPulse runtime artifacts
+subpulse_data/
+
+# Graphify / knowledge-graph cache
+graphify-out/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
