@@ -114,7 +114,15 @@ TAKEOVER_SIGNATURES: List[Dict[str, object]] = [
         "service": "AWS/CloudFront",
         "cname_patterns": ["cloudfront.net"],
         "http_status": None,
-        "http_fingerprints": ["Bad request", "ERROR: The request could not be satisfied"],
+        # CloudFront serves the same outer "ERROR: The request could not be
+        # satisfied" page for many unrelated 403s (WAF blocks, geo-restrictions,
+        # origin failures). Match only the takeover-specific body that says
+        # "Bad request" — i.e. CloudFront could not find a distribution whose
+        # alternate domain name matches the request. AWS still requires ACM
+        # ownership validation to claim a CNAME alias, so this remains
+        # informational; the writer routes vulnerable=False findings to
+        # takeover_review.txt rather than takeover_high.txt.
+        "http_fingerprints": ["Bad request"],
         "nxdomain_only": False,
         "vulnerable": False,
         "documentation": "can-i-take-over-xyz:aws/cloudfront",
@@ -1998,7 +2006,8 @@ def render_html_report(payload: Dict[str, object], run_dir: Path) -> str:
         _card("Resolved", counts.get("resolved", 0)),
         _card("Strict", counts.get("resolved_strict", 0)),
         _card("Alive URLs", counts.get("alive_urls", 0)),
-        _card("Takeover (HIGH)", counts.get("takeover_high", 0)),
+        _card("Takeover (HIGH, actionable)", counts.get("takeover_high", 0)),
+        _card("Takeover (REVIEW)", counts.get("takeover_review", 0)),
         _card("Takeover (MEDIUM)", counts.get("takeover_medium", 0)),
         _card("Takeover (LOW)", counts.get("takeover_low", 0)),
     ])
@@ -2023,9 +2032,17 @@ def render_html_report(payload: Dict[str, object], run_dir: Path) -> str:
         if not isinstance(t, dict):
             continue
         conf = (t.get("confidence") or "").upper()
+        vuln_raw = t.get("vulnerable")
+        if vuln_raw is True:
+            vuln_cell = "yes"
+        elif vuln_raw is False:
+            vuln_cell = "no"
+        else:
+            vuln_cell = "-"
         to_rows_html.append(
             "<tr>"
             f"<td><span class=\"badge badge-{_html_escape(conf)}\">{_html_escape(conf or '-')}</span></td>"
+            f"<td>{_html_escape(vuln_cell)}</td>"
             f"<td>{_html_escape(str(t.get('service','')))}</td>"
             f"<td><code>{_html_escape(str(t.get('host','')))}</code></td>"
             f"<td><code>{_html_escape(str(t.get('cname','')))}</code></td>"
@@ -2081,8 +2098,8 @@ def render_html_report(payload: Dict[str, object], run_dir: Path) -> str:
 
 <h2>Takeover findings ({len(payload.get('takeover') or [])})</h2>
 <div class="scroll"><table>
-<thead><tr><th>Confidence</th><th>Service</th><th>Host</th><th>CNAME</th><th>DNS</th><th>HTTP</th><th>Evidence</th></tr></thead>
-<tbody>{''.join(to_rows_html) or '<tr><td colspan="7" class="muted">(none)</td></tr>'}</tbody>
+<thead><tr><th>Confidence</th><th>Vuln</th><th>Service</th><th>Host</th><th>CNAME</th><th>DNS</th><th>HTTP</th><th>Evidence</th></tr></thead>
+<tbody>{''.join(to_rows_html) or '<tr><td colspan="8" class="muted">(none)</td></tr>'}</tbody>
 </table></div>
 
 <h2>Alive hosts</h2>
@@ -2665,6 +2682,71 @@ def _harvest_tls_sans(host: str, port: int = 443, timeout: float = 4.0) -> List[
     return out
 
 
+def _alias_appears_claimed(host: str, port: int = 443, timeout: float = 4.0) -> Tuple[bool, str]:
+    """
+    Active CNAME-claim check via TLS.
+
+    A subdomain takeover requires the upstream service's CNAME alias to be
+    UNCLAIMED — meaning no one has bound the host's name to a distribution /
+    app / bucket via the provider's ownership-validated alias mechanism
+    (ACM cert, Cloudflare custom hostname, Heroku SNI, etc).
+
+    If the upstream presents a valid TLS certificate that already covers the
+    host name (CN or SAN, exact match or wildcard one-label below), then by
+    construction the alias is claimed by whoever satisfied the provider's
+    domain-control validation. That can only be the legitimate owner of the
+    parent zone (or someone who already compromised it — which is out of
+    scope for an external recon tool to detect).
+
+    Returns (claimed, reason):
+      claimed=True  -> finding should be demoted; not exploitable as a takeover
+      claimed=False -> couldn't prove the alias is claimed (no cert, mismatched
+                       cert, handshake failure). Caller should keep the original
+                       confidence label.
+    """
+    import ssl
+    import socket
+
+    host_l = (host or "").strip().lower().rstrip(".")
+    if not host_l:
+        return (False, "")
+
+    names: Set[str] = set()
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        with socket.create_connection((host_l, port), timeout=timeout) as sock:
+            with ctx.wrap_socket(sock, server_hostname=host_l) as ssock:
+                cert = ssock.getpeercert() or {}
+        # Subject CN
+        for rdn in (cert.get("subject") or ()):
+            for k, v in rdn:
+                if k.lower() == "commonname" and isinstance(v, str):
+                    names.add(v.lower().rstrip("."))
+        # SubjectAltName DNS entries
+        for typ, val in (cert.get("subjectAltName") or ()):
+            if typ.upper() == "DNS" and isinstance(val, str):
+                names.add(val.lower().rstrip("."))
+    except Exception:
+        return (False, "")
+
+    if not names:
+        return (False, "")
+
+    for n in names:
+        if not n:
+            continue
+        if n == host_l:
+            return (True, f"tls_cert_covers_host=exact:{n}")
+        if n.startswith("*."):
+            base = n[2:]
+            # Wildcard *.foo.bar matches exactly one label below foo.bar.
+            if host_l.endswith("." + base) and host_l.count(".") == base.count(".") + 1:
+                return (True, f"tls_cert_covers_host=wildcard:{n}")
+
+    return (False, "")
+
+
 def _fetch_favicon_md5(host: str, port: int, scheme: str, timeout: float) -> str:
     """MD5 of /favicon.ico body. Empty on any failure."""
     import hashlib
@@ -3036,6 +3118,26 @@ def takeover_check(
                     f"Confirmed via HTTP body fingerprint for {service}. "
                     f"Status={http_status}. Pattern={http_fp!r}."
                 )
+                # Active CNAME-claim check: if the upstream presents a TLS
+                # cert that already covers the host name, the alias is claimed
+                # by the legitimate owner (ACM/SaaS provider validated it),
+                # so this is not exploitable as a takeover. Demote to INFO.
+                # Cheap (one TLS handshake) and high-signal — the single
+                # most effective false-positive killer for CDN/SaaS services.
+                if verify_http:
+                    claimed, claim_reason = _alias_appears_claimed(
+                        host, timeout=min(http_timeout, 4.0)
+                    )
+                    if claimed:
+                        confidence = "INFO"
+                        evidence.append(claim_reason)
+                        reason = (
+                            f"HTTP body fingerprint matched for {service} but the "
+                            f"upstream TLS certificate already covers the host "
+                            f"({claim_reason}). The CNAME alias is claimed by the "
+                            "legitimate owner; not exploitable as a takeover. "
+                            "Original 403 is most likely WAF / origin / geo / auth."
+                        )
             elif nxdomain_only and target_state in (DNS_STATE_NXDOMAIN, DNS_STATE_SERVFAIL):
                 confidence = "MEDIUM"
                 reason = (
@@ -3585,8 +3687,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
     # Output layout
     # ----------------------------------------------------------------
     # By default we group artifacts by concern (hosts/, dns/, alive/,
-    # takeover/, priority/) and keep only the four most-used files at the
-    # top level: report.md, scan.json, top_targets.txt, takeover_high.txt.
+    # takeover/, priority/) and keep the most-used files at the top level:
+    # report.md, scan.json, top_targets.txt, takeover_high.txt, and
+    # takeover_review.txt (only written when there are non-vulnerable
+    # fingerprint matches that warrant manual review).
     #
     # Use --flat to fall back to the legacy single-folder layout for
     # tooling that expects every artifact at run_dir root.
@@ -3605,7 +3709,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
         "report":         run_dir / "report.md",
         "scan_json":      run_dir / "scan.json",
         "top_targets":    run_dir / "top_targets.txt",
-        "takeover_high":  run_dir / "takeover_high.txt",
+        "takeover_high":   run_dir / "takeover_high.txt",
+        "takeover_review": run_dir / "takeover_review.txt",
 
         # ----- hosts/ -----
         "all":             hosts_d / "all.txt",
@@ -3839,17 +3944,23 @@ def cmd_scan(args: argparse.Namespace) -> int:
         f"- INFO:   {sum(1 for x in takeover_findings if x.confidence == 'INFO')}"
     )
     md_lines.append("")
-    md_lines.append("| Confidence | Service | Host | CNAME | DNS state | HTTP | Evidence |")
-    md_lines.append("|---|---|---|---|---|---|---|")
+    md_lines.append("| Confidence | Vuln | Service | Host | CNAME | DNS state | HTTP | Evidence |")
+    md_lines.append("|---|---|---|---|---|---|---|---|")
     for f in takeover_findings:
         http_cell = ""
         if f.http_status is not None:
             http_cell = f"{f.http_status}"
             if f.http_fingerprint:
                 http_cell += f" / `{f.http_fingerprint}`"
+        if f.vulnerable is True:
+            vuln_cell = "yes"
+        elif f.vulnerable is False:
+            vuln_cell = "no"
+        else:
+            vuln_cell = "-"
         evid = ", ".join(f.evidence)[:200]
         md_lines.append(
-            f"| {f.confidence or '-'} | {f.service or '-'} | `{f.host}` | "
+            f"| {f.confidence or '-'} | {vuln_cell} | {f.service or '-'} | `{f.host}` | "
             f"`{f.cname}` | {f.dns_state or '-'} | {http_cell or '-'} | {evid} |"
         )
     md_lines.append("")
@@ -3857,8 +3968,16 @@ def cmd_scan(args: argparse.Namespace) -> int:
         "_Note: Confidence HIGH = HTTP body fingerprint matched. MEDIUM = "
         "CNAME match + matching DNS state. LOW = CNAME match without "
         "confirming evidence. INFO = dangling CNAME without a known service "
-        "signature. All findings still require manual validation before "
-        "reporting / claiming._"
+        "signature, or alias proven claimed via TLS cert. All findings still "
+        "require manual validation before reporting / claiming._"
+    )
+    md_lines.append("")
+    md_lines.append(
+        "_Vuln column: `yes` = service is publicly documented as exploitable "
+        "today; `no` = service has been mitigated or requires extra conditions "
+        "(e.g. AWS CloudFront / Fastly require ACM-style ownership "
+        "validation). HIGH-confidence findings on `no`-rated services are "
+        "written to `takeover_review.txt`, not `takeover_high.txt`._"
     )
     write_lines(paths["takeover_txt"], md_lines)
 
@@ -3868,11 +3987,50 @@ def cmd_scan(args: argparse.Namespace) -> int:
     )
 
     # Dedicated HIGH-confidence file (script-friendly).
+    # Only services documented as currently exploitable land in
+    # takeover_high.txt — this is the actionable bucket. HIGH-confidence
+    # fingerprint matches against services with vulnerable=False (e.g. AWS
+    # CloudFront, Fastly, Zendesk) are split into takeover_review.txt so
+    # operators don't conflate "fingerprint matched" with "exploitable".
+    high_actionable = [
+        f for f in takeover_findings
+        if f.confidence == "HIGH" and f.vulnerable is True
+    ]
+    high_review = [
+        f for f in takeover_findings
+        if f.confidence == "HIGH" and f.vulnerable is not True
+    ]
+
     high_lines = [
         f"{f.host} -> {f.cname} | {f.service} | {f.reason}"
-        for f in takeover_findings if f.confidence == "HIGH"
+        for f in high_actionable
     ]
     write_lines(paths["takeover_high"], high_lines)
+
+    if high_review:
+        review_lines: List[str] = [
+            "# Takeover review (informational — NOT actionable as-is)",
+            "#",
+            "# These hosts matched a known service-takeover HTTP fingerprint, but",
+            "# the matched service is documented as NOT exploitable today (e.g.",
+            "# AWS CloudFront / Fastly require ACM-style ownership validation",
+            "# before a CNAME alias can be claimed). The 403/error body is more",
+            "# likely WAF, geo-restriction, missing auth, or origin failure.",
+            "#",
+            "# Validate by:",
+            "#   - Inspecting the served TLS cert's CN/SAN (cert covers host =>",
+            "#     alias is already claimed by the legitimate owner).",
+            "#   - Checking response headers for x-amz-cf-id / via: cloudfront /",
+            "#     server: ... that prove the request reached a real edge.",
+            "#   - Probing path/method variants (these are often email-tracking",
+            "#     or API endpoints that 403 a bare GET / by design).",
+            "#",
+        ]
+        review_lines.extend(
+            f"{f.host} -> {f.cname} | {f.service} | {f.reason}"
+            for f in high_review
+        )
+        write_lines(paths["takeover_review"], review_lines)
 
     # 6) Priority scoring
     alive_by_host: Dict[str, List[AliveResult]] = {}
@@ -3951,7 +4109,14 @@ def cmd_scan(args: argparse.Namespace) -> int:
             "alive_urls": len(alive_urls),
             "alive_clusters": len(cluster_rows),
             "takeover_candidates": len(takeover_findings),
-            "takeover_high": sum(1 for f in takeover_findings if f.confidence == "HIGH"),
+            "takeover_high": sum(
+                1 for f in takeover_findings
+                if f.confidence == "HIGH" and f.vulnerable is True
+            ),
+            "takeover_review": sum(
+                1 for f in takeover_findings
+                if f.confidence == "HIGH" and f.vulnerable is not True
+            ),
             "takeover_medium": sum(1 for f in takeover_findings if f.confidence == "MEDIUM"),
             "takeover_low": sum(1 for f in takeover_findings if f.confidence == "LOW"),
             "takeover_info": sum(1 for f in takeover_findings if f.confidence == "INFO"),
@@ -4014,8 +4179,17 @@ def cmd_scan(args: argparse.Namespace) -> int:
     report_lines.append(f"- Alive clusters: **{len(cluster_rows)}**")
     report_lines.append(f"- Takeover candidates: **{len(takeover_findings)}**")
     report_lines.append(
-        "  - HIGH: **{h}**, MEDIUM: **{m}**, LOW: **{l}**, INFO: **{i}**".format(
-            h=sum(1 for f in takeover_findings if f.confidence == "HIGH"),
+        "  - HIGH (actionable, vulnerable=yes): **{h}**, "
+        "REVIEW (HIGH-fp on non-vulnerable service): **{r}**, "
+        "MEDIUM: **{m}**, LOW: **{l}**, INFO: **{i}**".format(
+            h=sum(
+                1 for f in takeover_findings
+                if f.confidence == "HIGH" and f.vulnerable is True
+            ),
+            r=sum(
+                1 for f in takeover_findings
+                if f.confidence == "HIGH" and f.vulnerable is not True
+            ),
             m=sum(1 for f in takeover_findings if f.confidence == "MEDIUM"),
             l=sum(1 for f in takeover_findings if f.confidence == "LOW"),
             i=sum(1 for f in takeover_findings if f.confidence == "INFO"),
@@ -4040,7 +4214,15 @@ def cmd_scan(args: argparse.Namespace) -> int:
         report_lines.append(f"- HTML report (sortable tables): `{_rel(paths['report_html'])}`")
     report_lines.append(f"- Full scan JSON (single source of truth): `{_rel(paths['scan_json'])}`")
     report_lines.append(f"- Top targets: `{_rel(paths['top_targets'])}`")
-    report_lines.append(f"- HIGH-confidence takeovers: `{_rel(paths['takeover_high'])}`")
+    report_lines.append(
+        f"- HIGH-confidence takeovers (actionable, `vulnerable=yes`): "
+        f"`{_rel(paths['takeover_high'])}`"
+    )
+    if paths["takeover_review"].exists():
+        report_lines.append(
+            f"- HIGH-fingerprint review (informational, `vulnerable=no`): "
+            f"`{_rel(paths['takeover_review'])}`"
+        )
     report_lines.append("")
     report_lines.append("**`hosts/` — enumeration & validation:**")
     report_lines.append(f"- All discovered: `{_rel(paths['all'])}`")

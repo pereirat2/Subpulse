@@ -308,7 +308,8 @@ subpulse_data/<domain>/
     ├── report.html                  # self-contained HTML report (sortable tables)
     ├── scan.json                    # full structured data (single source of truth)
     ├── top_targets.txt              # top 50 prioritized hosts
-    ├── takeover_high.txt            # HIGH-confidence takeovers
+    ├── takeover_high.txt            # actionable takeovers (HIGH-confidence + vulnerable=yes)
+    ├── takeover_review.txt          # HIGH-fingerprint matches on services with vulnerable=no (informational; written only when present)
     ├── diff.md / diff.json          # structured diff vs previous run (--resume-diff)
     │
     ├── hosts/
@@ -488,6 +489,7 @@ python3 subpulse.py scan example.com --cache-ttl 86400
 - **Use `--resume-diff` from day one.** The diff output is most valuable when you have a baseline, so build the baseline immediately.
 - **Wildcards trip every recon tool.** If you see suspiciously perfect resolution, check `hosts/wildcard_fp.txt` before triaging anything else.
 - **Takeover confidence levels matter.** `HIGH` = HTTP body fingerprint matched. `MEDIUM` = CNAME + DNS state match, no HTTP confirmation. `LOW` / `INFO` = heuristic only — manual verification needed before reporting.
+- **`takeover_high.txt` vs `takeover_review.txt`.** The actionable bucket (`takeover_high.txt`) only contains HIGH-confidence findings on services that are publicly documented as exploitable today. HIGH-confidence fingerprint matches against services with `vulnerable=no` (e.g. AWS CloudFront / Fastly — both require ACM-style ownership validation before a CNAME alias can be claimed) are split into `takeover_review.txt` so they don't get conflated with real takeovers. SubPulse also runs an active **TLS-cert claim check** on every HIGH-confidence match: if the upstream presents a cert that already covers the host (CN/SAN match), the alias is provably claimed by the legitimate owner and the finding is auto-demoted to `INFO` with the supporting evidence recorded.
 - **Permutation cap.** Discovered labels can explode the candidate set. `--permute-max` is your safety valve.
 
 ## Roadmap
