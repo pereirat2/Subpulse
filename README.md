@@ -1,15 +1,8 @@
 <div align="center">
 
-```
-   ███████╗██╗   ██╗██████╗ ██████╗ ██╗   ██╗██╗     ███████╗███████╗
-   ██╔════╝██║   ██║██╔══██╗██╔══██╗██║   ██║██║     ██╔════╝██╔════╝
-   ███████╗██║   ██║██████╔╝██████╔╝██║   ██║██║     ███████╗█████╗
-   ╚════██║██║   ██║██╔══██╗██╔═══╝ ██║   ██║██║     ╚════██║██╔══╝
-   ███████║╚██████╔╝██████╔╝██║     ╚██████╔╝███████╗███████║███████╗
-   ╚══════╝ ╚═════╝ ╚═════╝ ╚═╝      ╚═════╝ ╚══════╝╚══════╝╚══════╝
-        ╱╲     ╱╲              ╱╲     ╱╲       subdomain
-    ───╱  ╲───╱  ╲────────────╱  ╲───╱  ╲────  reconnaissance
-```
+<img src="assets/logo.svg" alt="SubPulse — subdomain reconnaissance" width="820">
+
+<br>
 
 **Fast, single-file subdomain reconnaissance — passive + active discovery, alive checks, takeover detection, and structured reporting.**
 
