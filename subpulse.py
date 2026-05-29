@@ -3163,6 +3163,36 @@ def takeover_check(
                     "Manual review recommended."
                 )
 
+            # LOW-confidence false-positive suppression.
+            # If the upstream TLS certificate already covers the host name,
+            # the CNAME alias is claimed (provider-validated via ACM / SaaS
+            # custom-hostname / etc.) and the host is not exploitable as a
+            # takeover. Same TLS-claim signal used for HIGH above, but applied
+            # to LOW findings where we have a live HTTP response — typically:
+            #   - HTTP 200 serving the legitimate app (no fingerprint match)
+            #   - HTTP 404/410 from a real app's missing-route handler
+            # Skipped for MEDIUM (target itself is NXDOMAIN/SERVFAIL, so
+            # there is nothing to TLS-handshake against).
+            if (
+                confidence == "LOW"
+                and verify_http
+                and target_state == DNS_STATE_OK
+                and http_status is not None
+            ):
+                claimed, claim_reason = _alias_appears_claimed(
+                    host, timeout=min(http_timeout, 4.0)
+                )
+                if claimed:
+                    confidence = "INFO"
+                    vulnerable = False
+                    evidence.append(claim_reason)
+                    reason = (
+                        f"CNAME matches {service} but the upstream TLS "
+                        f"certificate already covers the host ({claim_reason}). "
+                        "The CNAME alias is claimed by the legitimate owner; "
+                        "not exploitable as a takeover."
+                    )
+
             return TakeoverFinding(
                 host=host,
                 cname=cname,
