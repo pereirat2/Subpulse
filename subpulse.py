@@ -25,6 +25,7 @@ import json
 import logging
 import random
 import re
+import shutil
 import string
 import time
 import threading
@@ -614,10 +615,9 @@ def cprint(msg: str) -> None:
     else:
         print(re.sub(r"\[/?[^\]]+\]", "", msg))
 
-# SubPulse wordmark (ANSI Shadow). Kept as a module-level constant so the
-# banner function stays small and so the art is easy to spot when reading
-# the file.
-_BANNER_WORDMARK: Tuple[str, ...] = (
+# SubPulse wordmark (ANSI Shadow) -- "big" variant shown on terminals
+# that can fit it without wrapping. Width = 73 visible columns.
+_BANNER_WORDMARK_BIG: Tuple[str, ...] = (
     r"   ███████╗██╗   ██╗██████╗ ██████╗ ██╗   ██╗██╗     ███████╗███████╗",
     r"   ██╔════╝██║   ██║██╔══██╗██╔══██╗██║   ██║██║     ██╔════╝██╔════╝",
     r"   ███████╗██║   ██║██████╔╝██████╔╝██║   ██║██║     ███████╗█████╗",
@@ -625,9 +625,22 @@ _BANNER_WORDMARK: Tuple[str, ...] = (
     r"   ███████║╚██████╔╝██████╔╝██║     ╚██████╔╝███████╗███████║███████╗",
     r"   ╚══════╝ ╚═════╝ ╚═════╝ ╚═╝      ╚═════╝ ╚══════╝╚══════╝╚══════╝",
 )
-# Color stops applied top->bottom of the wordmark for a soft cyan gradient
-# that evokes a pulse fading out. Truecolor-friendly; rich falls back to
-# 256-color or 16-color on terminals that don't speak truecolor.
+_BANNER_PULSE_BIG_TOP    = r"        ╱╲     ╱╲              ╱╲     ╱╲       subdomain"
+_BANNER_PULSE_BIG_BOTTOM = r"    ───╱  ╲───╱  ╲────────────╱  ╲───╱  ╲────  reconnaissance"
+
+# Compact wordmark for narrow terminals (~36 visible columns). Used when
+# the full ANSI-Shadow art would wrap.
+_BANNER_WORDMARK_SMALL: Tuple[str, ...] = (
+    r"   ___      _ ___      _",
+    r"  / __|_  _| | _ \_  _| |___ ___",
+    r"  \__ \ || | |  _/ || | (_-</ -_)",
+    r"  |___/\_,_|_|_|  \_,_|_/__/\___|",
+)
+_BANNER_PULSE_SMALL_TOP    = r"     ╱╲   ╱╲     subdomain"
+_BANNER_PULSE_SMALL_BOTTOM = r"  ──╱  ╲─╱  ╲──  reconnaissance"
+
+# Cyan gradient applied top->bottom for a soft "pulse fading out" feel.
+# Truecolor-friendly; rich downgrades to 256/16-color automatically.
 _BANNER_SHADES: Tuple[str, ...] = (
     "bold cyan",
     "bold bright_cyan",
@@ -636,36 +649,88 @@ _BANNER_SHADES: Tuple[str, ...] = (
     "bold #afe7ff",
     "bold #d0f0ff",
 )
-_BANNER_PULSE_TOP    = r"        ╱╲     ╱╲              ╱╲     ╱╲       subdomain"
-_BANNER_PULSE_BOTTOM = r"    ───╱  ╲───╱  ╲────────────╱  ╲───╱  ╲────  reconnaissance"
+
+# Minimum terminal widths each variant needs to render without wrapping.
+_BANNER_BIG_MIN_COLS = 76
+_BANNER_SMALL_MIN_COLS = 38
 
 __version__ = "2.0"
 
 
+def _terminal_cols(default: int = 80) -> int:
+    """Best-effort terminal width detection that prefers rich's view."""
+    if RICH and _RICH_CONSOLE is not None:
+        try:
+            cols = int(_RICH_CONSOLE.size.width)
+            if cols > 0:
+                return cols
+        except Exception:
+            pass
+    try:
+        return shutil.get_terminal_size((default, 20)).columns
+    except Exception:
+        return default
+
+
 def banner() -> None:
+    cols = _terminal_cols()
+
+    if cols >= _BANNER_BIG_MIN_COLS:
+        wordmark = _BANNER_WORDMARK_BIG
+        pulse_top, pulse_bottom = _BANNER_PULSE_BIG_TOP, _BANNER_PULSE_BIG_BOTTOM
+    elif cols >= _BANNER_SMALL_MIN_COLS:
+        wordmark = _BANNER_WORDMARK_SMALL
+        pulse_top, pulse_bottom = _BANNER_PULSE_SMALL_TOP, _BANNER_PULSE_SMALL_BOTTOM
+    else:
+        # Terminal too narrow for any ASCII art -- fall back to a single
+        # tagline. We still emit the authorized-use notice below.
+        wordmark = ()
+        pulse_top = pulse_bottom = ""
+
+    compact = cols < _BANNER_BIG_MIN_COLS
+    if compact:
+        footer = f"   v{__version__}  •  single-file recon"
+        notice = "   AUTHORIZED USE ONLY"
+        notice_tail = ""
+    else:
+        footer = (
+            f"   v{__version__}  •  single-file recon"
+            f"  •  https://github.com/pereirat2/Subpulse"
+        )
+        notice = "   ⚠  AUTHORIZED USE ONLY"
+        notice_tail = (
+            " — only scan targets you have explicit permission to test."
+        )
+
     if RICH and _RICH_CONSOLE is not None:
         _RICH_CONSOLE.print("")
-        for line, shade in zip(_BANNER_WORDMARK, _BANNER_SHADES):
-            _RICH_CONSOLE.print(line, style=shade)
-        _RICH_CONSOLE.print(_BANNER_PULSE_TOP, style="bold green")
-        _RICH_CONSOLE.print(_BANNER_PULSE_BOTTOM, style="green")
+        if wordmark:
+            for line, shade in zip(wordmark, _BANNER_SHADES):
+                _RICH_CONSOLE.print(line, style=shade)
+            if pulse_top:
+                _RICH_CONSOLE.print(pulse_top, style="bold green")
+                _RICH_CONSOLE.print(pulse_bottom, style="green")
+        else:
+            _RICH_CONSOLE.print(
+                f"[bold cyan]SubPulse[/bold cyan] [dim]v{__version__}[/dim]"
+            )
+        _RICH_CONSOLE.print(f"[dim]{footer}[/dim]")
         _RICH_CONSOLE.print(
-            f"[dim]   v{__version__}  •  single-file recon  •  "
-            f"https://github.com/pereirat2/Subpulse[/dim]"
-        )
-        _RICH_CONSOLE.print(
-            "[yellow]   ⚠  AUTHORIZED USE ONLY[/yellow][dim] — only scan "
-            "targets you have explicit permission to test.[/dim]"
+            f"[yellow]{notice}[/yellow][dim]{notice_tail}[/dim]"
         )
         _RICH_CONSOLE.print("")
     else:
-        for line in _BANNER_WORDMARK:
-            print(line)
-        print(_BANNER_PULSE_TOP)
-        print(_BANNER_PULSE_BOTTOM)
-        print(f"   v{__version__}  -  single-file recon")
-        print(f"   AUTHORIZED USE ONLY. {DISCLAIMER}")
-        print("-" * 76)
+        if wordmark:
+            for line in wordmark:
+                print(line)
+            if pulse_top:
+                print(pulse_top)
+                print(pulse_bottom)
+        else:
+            print(f"SubPulse v{__version__}")
+        print(footer)
+        print(f"{notice}{notice_tail}")
+        print("-" * min(76, max(40, cols - 2)))
 
 def progress() -> Optional["Progress"]:
     if not RICH or _RICH_CONSOLE is None:
