@@ -1,14 +1,15 @@
 <!DOCTYPE html>
 <!--
   ─────────────────────────────────────────────────────────────────────
-   SubPulse  —  Subdomain Takeover Proof of Concept
-   PoC by Sec4Sins  ·  https://github.com/Sec4Sins/Subpulse
+   Subdomain Takeover  —  Proof of Concept
   ─────────────────────────────────────────────────────────────────────
-   This page is served from a subdomain that was found to be pointing
-   to an unclaimed third-party service (dangling CNAME). The fact that
-   you can read these words from the original host's domain proves the
-   takeover is exploitable. No malicious payload, no data collection,
-   no cookies. Purely a non-destructive proof for responsible
+   This page is being served from a subdomain that was found to be
+   pointing to an unclaimed third-party endpoint (dangling CNAME).
+   The fact that you can read these words from the original host's
+   domain proves the takeover is exploitable.
+
+   No malicious payload. No data collection. No cookies set.
+   Purely a non-destructive proof of concept for responsible
    disclosure.
   ─────────────────────────────────────────────────────────────────────
 -->
@@ -98,7 +99,7 @@
   .top .meta b{color:var(--txt);font-weight:500}
 
   /* ───────── hero ───────── */
-  .hero{margin-top:38px;text-align:center;position:relative}
+  .hero{margin-top:38px;text-align:center;position:relative;padding:18px 12px 6px}
   .stamp{
     display:inline-flex;align-items:center;gap:10px;
     font-family:var(--mono);font-size:12px;letter-spacing:.3em;
@@ -111,22 +112,48 @@
   h1.title{
     font-family:var(--mono);
     font-size:clamp(34px,7vw,72px);
-    font-weight:800;letter-spacing:-.02em;line-height:1.02;
-    margin:18px auto 6px;max-width:14ch;
+    font-weight:800;letter-spacing:-.02em;line-height:1.15;
+    margin:22px auto 6px;max-width:18ch;
+    padding:0 4px;
     background:linear-gradient(180deg,#eafff8 0%,#7afcff 60%,#00ffc8 100%);
     -webkit-background-clip:text;background-clip:text;color:transparent;
-    text-shadow:0 0 60px rgba(0,255,200,.25);
+    -webkit-text-fill-color:transparent;
+    text-shadow:0 0 40px rgba(0,255,200,.18);
     position:relative;
   }
+  /* glitch is a brief, occasional flicker — not a constant overlay */
   h1.title .glitch{position:relative;display:inline-block}
-  h1.title .glitch::before,h1.title .glitch::after{
-    content:attr(data-text);position:absolute;left:0;top:0;width:100%;
-    mix-blend-mode:screen;pointer-events:none;
+  h1.title .glitch::before,
+  h1.title .glitch::after{
+    content:attr(data-text);position:absolute;left:0;top:0;width:100%;height:100%;
+    background:transparent;mix-blend-mode:screen;pointer-events:none;
+    opacity:0; /* hidden by default — only visible during keyframe flashes */
+    -webkit-background-clip:initial;background-clip:initial;-webkit-text-fill-color:currentColor;
   }
-  h1.title .glitch::before{color:var(--danger);transform:translate(2px,0);clip-path:polygon(0 0,100% 0,100% 33%,0 33%);animation:glitchA 4.6s infinite steps(1)}
-  h1.title .glitch::after{color:var(--accent-2);transform:translate(-2px,0);clip-path:polygon(0 66%,100% 66%,100% 100%,0 100%);animation:glitchB 5.1s infinite steps(1)}
-  @keyframes glitchA{0%,92%,100%{transform:translate(0,0)}93%{transform:translate(3px,-1px)}95%{transform:translate(-3px,1px)}97%{transform:translate(2px,2px)}}
-  @keyframes glitchB{0%,90%,100%{transform:translate(0,0)}91%{transform:translate(-3px,2px)}93%{transform:translate(2px,-2px)}96%{transform:translate(-2px,-1px)}}
+  h1.title .glitch::before{
+    color:var(--danger);
+    clip-path:polygon(0 8%,100% 8%,100% 42%,0 42%);
+    animation:glitchA 7s infinite;
+  }
+  h1.title .glitch::after{
+    color:var(--accent-2);
+    clip-path:polygon(0 58%,100% 58%,100% 92%,0 92%);
+    animation:glitchB 7s infinite;
+  }
+  @keyframes glitchA{
+    0%, 96%, 100% {opacity:0; transform:translate(0,0)}
+    96.3%        {opacity:.85; transform:translate(3px,-1px)}
+    96.7%        {opacity:0;   transform:translate(0,0)}
+    97.4%        {opacity:.85; transform:translate(-3px,1px)}
+    98%          {opacity:0;   transform:translate(0,0)}
+  }
+  @keyframes glitchB{
+    0%, 94%, 100% {opacity:0; transform:translate(0,0)}
+    94.3%        {opacity:.85; transform:translate(-3px,2px)}
+    94.7%        {opacity:0;   transform:translate(0,0)}
+    95.4%        {opacity:.85; transform:translate(2px,-2px)}
+    96%          {opacity:0;   transform:translate(0,0)}
+  }
 
   .sub{font-family:var(--mono);color:var(--muted);font-size:14px;letter-spacing:.04em;max-width:60ch;margin:14px auto 0}
   .sub .hl{color:var(--accent)}
@@ -230,11 +257,19 @@
     background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.6'/></svg>");
   }
 
+  /* respect users who prefer reduced motion */
+  @media (prefers-reduced-motion: reduce){
+    h1.title .glitch::before,h1.title .glitch::after{animation:none;opacity:0}
+    canvas#matrix{display:none}
+    .grid{animation:none}
+    .brand .dot,.stamp::before,.caret{animation:none}
+  }
+
   /* responsive row */
   @media (max-width:560px){
     .row{grid-template-columns:1fr;gap:6px}
     .row .k{padding-top:0}
-    h1.title{font-size:40px}
+    h1.title{font-size:36px;max-width:none}
   }
 </style>
 </head>
@@ -250,10 +285,10 @@
   <header class="top">
     <div class="brand">
       <span class="dot"></span>
-      <span>SUBPULSE // PoC by Sec4Sins</span>
+      <span>SECURITY RESEARCH  //  PROOF OF CONCEPT</span>
     </div>
     <div class="meta">
-      <div>CASE&nbsp;ID&nbsp;<b id="caseId">SP-────────</b></div>
+      <div>CASE&nbsp;ID&nbsp;<b id="caseId">PoC-────────</b></div>
       <div>UTC&nbsp;<b id="utc">────-──-── ──:──:──</b></div>
     </div>
   </header>
@@ -263,9 +298,10 @@
     <div class="stamp">VULNERABILITY · subdomain takeover</div>
     <h1 class="title"><span class="glitch" data-text="THIS HOST HAS BEEN CLAIMED.">THIS HOST HAS BEEN CLAIMED.</span></h1>
     <p class="sub">
-      You are viewing content served from a third-party endpoint on the original organisation's domain.
-      The DNS record below points at an <span class="hl">unclaimed</span> external service that any party
-      could register. This is a non-destructive proof of concept for <span class="hl">responsible disclosure</span>.
+      You are viewing content served from an external endpoint on this organisation's domain.
+      The DNS record below points at an <span class="hl">unclaimed</span> third-party resource that any
+      party could register. This is a non-destructive proof of concept for
+      <span class="hl">responsible disclosure</span>.
     </p>
   </section>
 
@@ -328,14 +364,14 @@
   </section>
 
   <section class="term" aria-label="exploitation log">
-    <div class="bar"><i></i><i></i><i></i><span>~/subpulse/poc · zsh · 80×24</span></div>
+    <div class="bar"><i></i><i></i><i></i><span>~/poc · zsh · 80×24</span></div>
     <div class="body" id="term"></div>
   </section>
 
   <section class="grid2">
     <div class="card">
       <h3>// Impact</h3>
-      <p>An attacker controlling the target service can serve arbitrary HTML, JavaScript, and TLS-trusted content under the victim's domain. This enables:</p>
+      <p>An attacker controlling the target endpoint can serve arbitrary HTML, JavaScript, and TLS-trusted content under this organisation's domain. This enables:</p>
       <ul>
         <li>Phishing campaigns using legitimate, trusted hostnames</li>
         <li>Cookie theft / session hijack via shared-parent cookies</li>
@@ -349,22 +385,21 @@
       <p>Choose one of the following — the faster, the better:</p>
       <ul>
         <li>Remove the dangling DNS record from the authoritative zone</li>
-        <li>Re-claim the resource on the target service provider</li>
+        <li>Re-claim the resource on the upstream provider</li>
         <li>Repoint the record to an asset you actively control</li>
-        <li>Adopt a DNS hygiene policy: orphan-CNAME sweeps in CI</li>
-        <li>Monitor continuously with <span style="color:var(--accent)">SubPulse</span></li>
+        <li>Adopt a DNS hygiene policy: periodic orphan-CNAME sweeps</li>
+        <li>Monitor the zone continuously for newly-dangling records</li>
       </ul>
     </div>
   </section>
 
   <footer>
     <div>
-      Report: <a href="mailto:security@example.com">security@example.com</a> &nbsp;·&nbsp;
-      Authorised reconnaissance only.
+      Report to: <a href="mailto:security@example.com">security@example.com</a> &nbsp;·&nbsp;
+      Authorised security research only.
     </div>
     <div>
-      Generated by <a href="https://github.com/Sec4Sins/Subpulse" target="_blank" rel="noopener noreferrer">SubPulse</a>
-      · PoC by <b style="color:var(--accent)">Sec4Sins</b>
+      Non-destructive proof of concept &nbsp;·&nbsp; no data collected
     </div>
   </footer>
 
@@ -373,19 +408,19 @@
 <script>
 /* ─────────────────────────────────────────────────────────────────
    FINDING DATA
-   These placeholders are auto-replaced by SubPulse when the page
-   is rendered for a real finding. When deployed manually, the
-   defaults below display the current hostname so the page still
-   "just works" on any captured subdomain.
+   Placeholders below are auto-replaced when the page is rendered
+   for a specific finding. When deployed manually, the defaults
+   read the current hostname so the page "just works" on any
+   captured subdomain — without naming any specific provider.
    ───────────────────────────────────────────────────────────────── */
 const FINDING = {
-  host:       window.SUBPULSE_HOST       || location.hostname || "vulnerable.example.com",
-  cnameTarget:window.SUBPULSE_CNAME      || "unclaimed-bucket.s3.amazonaws.com",
-  service:    window.SUBPULSE_SERVICE    || "Detected: dangling third-party service",
-  confidence: window.SUBPULSE_CONFIDENCE || "HIGH",
-  dnsState:   window.SUBPULSE_DNS_STATE  || "ok",
-  httpStatus: window.SUBPULSE_HTTP       || 200,
-  evidence:   window.SUBPULSE_EVIDENCE   || null
+  host:        window.TAKEOVER_HOST        || location.hostname || "vulnerable.example.com",
+  cnameTarget: window.TAKEOVER_CNAME       || "unclaimed.third-party-provider.example",
+  service:     window.TAKEOVER_SERVICE     || "Dangling third-party endpoint",
+  confidence:  window.TAKEOVER_CONFIDENCE  || "HIGH",
+  dnsState:    window.TAKEOVER_DNS_STATE   || "ok",
+  httpStatus:  window.TAKEOVER_HTTP        || 200,
+  evidence:    window.TAKEOVER_EVIDENCE    || null
 };
 
 /* ─────────── populate target card ─────────── */
@@ -407,7 +442,7 @@ const FINDING = {
   /* case id + utc */
   const id = Array.from(crypto.getRandomValues(new Uint8Array(4)))
     .map(b => b.toString(16).padStart(2,"0")).join("").toUpperCase();
-  document.getElementById("caseId").textContent = "SP-" + id;
+  document.getElementById("caseId").textContent = "PoC-" + id;
   const tick = () => {
     const d = new Date();
     const p = n => String(n).padStart(2,"0");
@@ -424,13 +459,13 @@ const FINDING = {
   const H  = FINDING.host;
   const T  = FINDING.cnameTarget;
   const lines = [
-    {c:"acc",  t:"$ subpulse takeover --confirm "+H},
+    {c:"acc",  t:"$ takeover-check --confirm "+H},
     {c:"dim",  t:"[*] resolving authoritative nameservers for "+H+" …"},
     {c:"",     t:"[+] CNAME chain   : "+H+" → "+T},
     {c:"",     t:"[+] target DNS    : ok"},
     {c:"",     t:"[+] target apex   : SOA present (target is a real zone)"},
     {c:"",     t:"[+] http probe    : GET https://"+H+"/  →  HTTP 200"},
-    {c:"warn", t:"[!] body fingerprint matches known unclaimed-service signature"},
+    {c:"warn", t:"[!] body fingerprint matches known unclaimed-endpoint signature"},
     {c:"err",  t:"[VULN] dangling CNAME confirmed — subdomain takeover possible"},
     {c:"dim",  t:"[*] deploying non-destructive proof of concept …"},
     {c:"ok",   t:"[OK] PoC served at https://"+H+"/  ← you are here"},
@@ -466,7 +501,7 @@ const FINDING = {
   const c = document.getElementById("matrix");
   const ctx = c.getContext("2d");
   let w, h, cols, drops, fontSize = 14;
-  const glyphs = "01░▒▓<>/\\$#@*+=-_アァカサタナハマヤラワabcdefSUBPULSE".split("");
+  const glyphs = "01░▒▓<>/\\$#@*+=-_アァカサタナハマヤラワabcdef".split("");
 
   function resize(){
     w = c.width  = window.innerWidth  * devicePixelRatio;
@@ -494,21 +529,6 @@ const FINDING = {
     }
   }
   setInterval(draw, 60);
-})();
-
-/* ─────────── konami easter egg: flip to "claimed by you" mode ─────────── */
-(function easter(){
-  const seq = ["ArrowUp","ArrowUp","ArrowDown","ArrowDown","ArrowLeft","ArrowRight","ArrowLeft","ArrowRight","b","a"];
-  let i = 0;
-  window.addEventListener("keydown", e => {
-    if (e.key === seq[i]) { i++; if (i === seq.length){
-      document.documentElement.style.setProperty("--accent","#ff2e63");
-      document.documentElement.style.setProperty("--accent-2","#ffb648");
-      document.querySelector("h1.title .glitch").setAttribute("data-text","PWNED BY SEC4SINS.");
-      document.querySelector("h1.title .glitch").textContent = "PWNED BY SEC4SINS.";
-      i = 0;
-    } } else { i = 0; }
-  });
 })();
 </script>
 </body>
